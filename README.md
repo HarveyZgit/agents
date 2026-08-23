@@ -11,7 +11,6 @@ scripts/    # 宿主中立检查
 
 ## 安装 Skills
 
-仓库是私有的，本机已有 git / `gh` 登录即可：
 
 ```sh
 npx skills add HarveyZgit/agents
