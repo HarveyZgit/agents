@@ -33,6 +33,14 @@ SCAN_FILES = {
     "AGENTS.md",
     "README.md",
 }
+# Distributing rules into host configurations requires naming hosts and their
+# runtime paths. Those files are the adapter layer, exempt by the same logic as
+# ADAPTER_CONTENT above. The exemption is per file, so the Skill body shipped
+# alongside them stays scanned and must remain host-neutral.
+HOST_ADAPTER_FILES = {
+    "skills/rules-sync/references/hosts.md",
+    "skills/rules-sync/scripts/sync_rules.py",
+}
 EXCLUDED_PARTS = {"tests", "fixtures", "workspace", "dist", "node_modules"}
 BINARY_SUFFIXES = {".gif", ".ico", ".jpeg", ".jpg", ".mp3", ".mp4", ".otf", ".pdf", ".png", ".ttf", ".wav", ".webp", ".woff", ".woff2", ".zip"}
 GUARD_FILES = {"scripts/check-agent-neutrality.py", "scripts/test-agent-neutrality.py"}
@@ -97,7 +105,7 @@ def repository_files() -> list[Path]:
 
 def should_scan(relative_path: Path) -> bool:
     path = relative_path.as_posix()
-    if path in GUARD_FILES or path in ADAPTER_CONTENT:
+    if path in GUARD_FILES or path in ADAPTER_CONTENT or path in HOST_ADAPTER_FILES:
         return False
     if any(part in EXCLUDED_PARTS for part in relative_path.parts):
         return False

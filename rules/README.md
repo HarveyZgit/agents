@@ -1,8 +1,6 @@
 # rules
 
-原子化通用准则片段的唯一真源。这里放跨项目、跨 Agent 宿主都成立的少量行为准则，供未来分发到各宿主的全局配置（Claude Code / Codex / Cursor / Grok / Antigravity 等），或被项目文档与 Skill 按需引用。
-
-分发机制**尚未实现**，但片段格式已按分发需求设计：现在写的每个片段，未来不需要改动就能被任何分发方式消费。
+原子化通用准则片段的唯一真源。这里放跨项目、跨 Agent 宿主都成立的少量行为准则，由 `skills/rules-sync/` 分发进各宿主的全局配置，也可被项目文档与 Skill 按需引用。
 
 ## 资产分类模型
 
@@ -43,11 +41,13 @@ tier: core | on-demand
 - `core`：进入所有宿主的全局上下文，每个会话都加载。**全部 core 片段拼起来的总预算约 100 行**——超了说明有片段应降级为 `on-demand` 或根本不该是 rule。
 - `on-demand`：不进全局，由项目 AGENTS.md、Skill 或用户显式引用时才加载。
 
-## 未来分发形态（设计已定，暂不实现）
+## 分发
 
-1. **生成拼装**：脚本把 `tier: core` 的片段剥 frontmatter 后按 `name` 排序拼进各宿主全局文件（如 `~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`、Cursor 的 `.mdc`）。生成区块带管理标记、幂等、只碰自己管理的内容，原则同 `scripts/link-skills.sh`。
-2. **路径引用**（已在用）：项目文档、Skill、以及支持 import 的宿主全局配置（如 Claude Code CLAUDE.md 的 `@路径` 语法）直接引用片段文件（含 `on-demand` 片段），仓库文件即活的真源，改动即生效。本机统一经中立挂载点引用：`~/.agents/workbench-rules -> <repo>/resources/rules`，全局配置只写 `@~/.agents/workbench-rules/<name>.md`，不出现仓库真实路径，仓库搬家只需改这一个软链。挂载点和片段文件名被引用后**不轻易改名**。注意：没有宿主会自动扫描 `~/.agents`，挂载点不能免去显式引用；import 会连 frontmatter 一起载入，几行元数据噪声可接受，不接受该噪声或不支持 import 的宿主走生成拼装。
-3. **宿主适配**：需要专属格式的宿主（如 Cursor `.mdc` 的 frontmatter）由适配器在分发时生成，源文件保持纯 Markdown。
+`tier: core` 的片段由 `rules-sync` skill 装进本机各宿主：它按脚本里写死的 revision 从本仓库拉片段到一个中立目录，再按宿主能力接线——能跟随活引用的宿主拿到指向该目录的引用，什么都不展开的宿主拿到剥掉 frontmatter 的拼装块，全局规则只存在于界面输入框的宿主拿到待粘贴文本。宿主清单和每个宿主为什么是这个模式，见 `skills/rules-sync/references/hosts.md`；宿主路径只允许出现在那一层。
+
+`on-demand` 片段不进全局分发，由项目文档、Skill 或用户显式引用文件路径。片段文件名一旦被引用就**不轻易改名**。
+
+改完片段要让本机生效：bump `rules-sync` 脚本里的 `SOURCE_REF`，再跑一次它的 update。
 
 ## 新增片段的准入标准
 

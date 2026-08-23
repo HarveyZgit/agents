@@ -30,6 +30,15 @@ class AgentNeutralityGuardTest(unittest.TestCase):
         self.assertFalse(GUARD.should_scan(Path("packages/product/src/page.tsx")))
         self.assertFalse(GUARD.should_scan(Path("skills/example/tests/test.py")))
 
+    def test_host_adapter_exemption_stays_narrow(self) -> None:
+        for path in GUARD.HOST_ADAPTER_FILES:
+            self.assertFalse(GUARD.should_scan(Path(path)))
+            self.assertTrue(
+                (GUARD.REPO_ROOT / path).exists(),
+                f"{path} is exempt but missing; drop the exemption instead of keeping it stale",
+            )
+        self.assertTrue(GUARD.should_scan(Path("skills/rules-sync/SKILL.md")))
+
     def test_rejects_host_specific_workflow(self) -> None:
         patterns = dict(GUARD.RULES)
         self.assertIsNotNone(patterns["vendor-runtime-path"].search("write to ~/.claude/state"))

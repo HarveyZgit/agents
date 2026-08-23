@@ -21,6 +21,16 @@ npx skills add HarveyZgit/agents --list
 
 包绑定型 Skill（例如 workbench 里的 `markdown-comment`）不在这里。
 
+## 安装 Rules
+
+`npx skills` 只认 Skill，没有 rules 概念，所以 rules 片段由 `rules-sync` 这个 Skill 自己分发：
+
+```sh
+npx skills add HarveyZgit/agents --skill rules-sync
+```
+
+装好后让它跑 install，它会把 `tier: core` 片段按各宿主支持的机制接进本机的全局配置，并支持 update / check / uninstall。见 [rules/README.md](rules/README.md)。
+
 ## 新增 Skill
 
 1. 建 `skills/<name>/SKILL.md`，写好 `name` / `description`（做什么 + 什么时候用）。
