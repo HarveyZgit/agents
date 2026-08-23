@@ -20,7 +20,7 @@ python3 scripts/sync_rules.py list-hosts               # known hosts, mechanism,
 python3 scripts/sync_rules.py install --dry-run        # plan only; add --diff for exact edits
 python3 scripts/sync_rules.py install                  # fetch the tracked branch and wire hosts
 python3 scripts/sync_rules.py update                   # same, to pick up newer fragments
-python3 scripts/sync_rules.py check                    # offline drift report; non-zero on drift
+python3 scripts/sync_rules.py check                    # drift report; non-zero on drift
 python3 scripts/sync_rules.py uninstall                # revert every recorded change
 ```
 
@@ -39,6 +39,6 @@ Never remove a host's wiring without the user asking for it. `install --host X` 
 
 ## Maintaining the adapter
 
-`SOURCE_REF` at the top of the script is the tracked branch, so publishing fragments needs no change to the script: the next `update` fetches the new tip. The cost is that freshness cannot be judged offline — `check` verifies that hosts still match the local store, not that the store matches the remote. When the user asks whether their rules are current, run `update`; it is idempotent and reports nothing to change when they already are. Use `--ref <sha>` when a run must be reproducible.
+`SOURCE_REF` at the top of the script is the tracked branch, so publishing fragments needs no change to the script: the next `update` fetches the new tip. Each install records the commit it resolved to, so `check` reports a moved branch as drift; when the remote cannot be reached it says so and still checks the wiring. Use `--ref <sha>` when a run must be reproducible.
 
 Each entry in the script's `HOSTS` table carries the capability its mode depends on. Re-check that capability before switching a host's mode: the mechanism is a consequence of what the host can follow, not a preference.

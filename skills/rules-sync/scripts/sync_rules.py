@@ -31,7 +31,8 @@ from pathlib import Path
 
 # The tracked branch: `install` and `update` fetch its current tip, so publishing
 # fragments needs no change here. Pass --ref to pin a specific revision instead.
-# Freshness therefore cannot be judged offline; `update` is the way to catch up.
+# The receipt records the commit each install resolved to, so `check` can tell
+# whether the branch has moved since.
 SOURCE_REPO = "HarveyZgit/agents"
 SOURCE_REF = "main"
 SOURCE_SUBDIR = "rules"
@@ -231,6 +232,24 @@ def download(url: str, attempts: int = 3) -> bytes:
                 break
             time.sleep(2**attempt)
     raise SystemExit(f"cannot download {url}: {last_error}")
+
+
+def resolve_commit(ref: str) -> str | None:
+    """The commit a ref points at now, or None when the remote cannot be asked.
+
+    Non-fatal by design: this only sharpens reporting, so a machine that is
+    offline still installs and still gets a drift report for its wiring.
+    """
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{SOURCE_REPO}/commits/{ref}",
+        headers={"User-Agent": "rules-sync", "Accept": "application/vnd.github.sha"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            sha = response.read().decode("utf-8").strip()
+    except (urllib.error.URLError, OSError, UnicodeDecodeError):
+        return None
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
 
 
 def fetch_fragments(ref: str) -> list[Fragment]:
@@ -618,7 +637,12 @@ def command_install(args: argparse.Namespace) -> int:
         return 1
 
     fragments = fetch_fragments(ref)
-    print(f"source {SOURCE_REPO}@{ref[:12]} · {len(fragments)} core fragment(s)")
+    source = {"repo": SOURCE_REPO, "ref": ref, "subdir": SOURCE_SUBDIR}
+    commit = resolve_commit(ref)
+    if commit:
+        source["commit"] = commit
+    stamp = f"{ref} ({commit[:12]})" if commit else ref
+    print(f"source {SOURCE_REPO}@{stamp} · {len(fragments)} core fragment(s)")
     for fragment in fragments:
         print(f"  - {fragment.name}")
 
@@ -661,7 +685,7 @@ def command_install(args: argparse.Namespace) -> int:
         write_receipt(
             {
                 "version": RECEIPT_VERSION,
-                "source": {"repo": SOURCE_REPO, "ref": ref, "subdir": SOURCE_SUBDIR},
+                "source": source,
                 "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "fragments": [fragment.filename for fragment in fragments],
                 "hosts": host_records,
@@ -683,15 +707,21 @@ def command_check(args: argparse.Namespace) -> int:
         return 1
 
     installed_ref = receipt.get("source", {}).get("ref", "unknown")
+    installed_commit = receipt.get("source", {}).get("commit")
     fragments = read_store_fragments()
-    print(f"installed {SOURCE_REPO}@{installed_ref[:12]} · {len(fragments)} fragment(s)")
+    stamp = f"{installed_ref} ({installed_commit[:12]})" if installed_commit else installed_ref
+    print(f"installed {SOURCE_REPO}@{stamp} · {len(fragments)} fragment(s)")
 
     wired = receipt.get("hosts", {})
     problems: list[str] = []
     if installed_ref != SOURCE_REF:
-        # Only fires when a specific revision was installed with --ref: the
-        # tracked branch cannot be compared against its own tip offline.
         problems.append(f"installed from {installed_ref[:12]}, not {SOURCE_REF}; run `update`")
+    elif installed_commit:
+        tip = resolve_commit(SOURCE_REF)
+        if tip is None:
+            print(f"  cannot reach the remote; whether {SOURCE_REF} moved is unknown")
+        elif tip != installed_commit:
+            problems.append(f"{SOURCE_REF} is now at {tip[:12]}; run `update`")
     if not fragments:
         problems.append(f"{store_dir()} holds no readable fragment")
     if not wired:
