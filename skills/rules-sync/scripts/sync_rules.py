@@ -250,19 +250,29 @@ def download(url: str, attempts: int = 3) -> bytes:
 def resolve_commit(ref: str) -> str | None:
     """The commit a ref points at now, or None when the remote cannot be asked.
 
+    Reads git's ref advertisement rather than the REST API: it needs no token and
+    has no hourly budget, which a handful of checks would otherwise exhaust.
+
     Non-fatal by design: this only sharpens reporting, so a machine that is
     offline still installs and still gets a drift report for its wiring.
     """
+    if re.fullmatch(r"[0-9a-f]{40}", ref):
+        return ref
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{SOURCE_REPO}/commits/{ref}",
-        headers={"User-Agent": "rules-sync", "Accept": "application/vnd.github.sha"},
+        f"https://github.com/{SOURCE_REPO}.git/info/refs?service=git-upload-pack",
+        headers={"User-Agent": "rules-sync"},
     )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
-            sha = response.read().decode("utf-8").strip()
-    except (urllib.error.URLError, OSError, UnicodeDecodeError):
+            advertisement = response.read()
+    except (urllib.error.URLError, OSError):
         return None
-    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+    for kind in (b"heads", b"tags"):
+        pattern = rb"([0-9a-f]{40}) refs/" + kind + b"/" + re.escape(ref.encode()) + rb"[\x00\n]"
+        match = re.search(pattern, advertisement)
+        if match:
+            return match.group(1).decode("ascii")
+    return None
 
 
 def fetch_fragments(ref: str) -> list[Fragment]:
@@ -717,6 +727,8 @@ def command_install(args: argparse.Namespace) -> int:
     print(f"source {SOURCE_REPO}@{stamp} · {len(fragments)} core fragment(s)")
     for fragment in fragments:
         print(f"  - {fragment.name}")
+    if not commit:
+        print(f"  note: {ref} did not resolve to a commit; `check` cannot tell whether it moves")
 
     # Plan every host before applying anything: a host that cannot be planned
     # must not abort the run halfway and leave earlier hosts wired with no
@@ -794,6 +806,10 @@ def command_check(args: argparse.Namespace) -> int:
             print(f"  cannot reach the remote; whether {SOURCE_REF} moved is unknown")
         elif tip != installed_commit:
             problems.append(f"{SOURCE_REF} is now at {tip[:12]}; run `update`")
+    else:
+        # An install that could not reach the remote records no commit; say so
+        # instead of dropping the freshness question silently.
+        print(f"  no commit recorded for {installed_ref}; run `update` to record one")
     if not fragments:
         problems.append(f"{store_dir()} holds no readable fragment")
     if not wired:

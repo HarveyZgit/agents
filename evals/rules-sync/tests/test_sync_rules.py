@@ -261,6 +261,12 @@ class ConfigHostTest(unittest.TestCase):
             self.plan_against(self.config)
 
 
+class ResolveCommitTest(unittest.TestCase):
+    def test_a_commit_needs_no_lookup(self) -> None:
+        sha = "0" * 40
+        self.assertEqual(ADAPTER.resolve_commit(sha), sha)
+
+
 class ForeignCopyTest(unittest.TestCase):
     """Another tool may already publish these fragments under its own markers."""
 
