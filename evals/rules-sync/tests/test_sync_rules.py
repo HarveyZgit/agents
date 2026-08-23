@@ -183,13 +183,14 @@ class ConfigHostTest(unittest.TestCase):
         else:
             os.environ["AGENT_RULES_HOME"] = self.original_store
 
-    def plan_against(self, target: Path):
+    def plan_against(self, target: Path, alternate: Path | None = None):
         host = ADAPTER.Host(
             key=self.host.key,
             label=self.host.label,
             mode=self.host.mode,
             detect=self.host.detect,
             target=str(target),
+            alt_target=str(alternate) if alternate else "",
         )
         return ADAPTER.plan_config(host)
 
@@ -223,12 +224,78 @@ class ConfigHostTest(unittest.TestCase):
         self.assertEqual(result["instructions"], ["docs/own.md"])
         self.assertEqual(result["theme"], "dark")
 
+    def test_the_alternate_spelling_is_not_shadowed_by_a_new_thin_file(self) -> None:
+        # The host reads either spelling; creating the second one would leave two
+        # configs whose precedence it does not document.
+        alternate = self.config.with_suffix(".jsonc")
+        alternate.write_text('{\n  // mine\n  "theme": "dark"\n}\n', encoding="utf-8")
+        actions = self.plan_against(self.config, alternate)
+        self.assertTrue(actions[0].conflict)
+        self.assertIn("JSONC", actions[0].conflict)
+        self.assertIn(ADAPTER.config_glob(), actions[0].conflict)
+        self.assertFalse(self.config.exists())
+
+    def test_a_glob_already_present_in_the_alternate_is_accepted(self) -> None:
+        alternate = self.config.with_suffix(".jsonc")
+        alternate.write_text(
+            '{\n  // mine\n  "instructions": ["%s"]\n}\n' % ADAPTER.config_glob(),
+            encoding="utf-8",
+        )
+        actions = self.plan_against(self.config, alternate)
+        self.assertFalse(actions[0].conflict)
+        self.assertIsNone(actions[0].apply)
+
+    def test_both_spellings_present_is_refused(self) -> None:
+        alternate = self.config.with_suffix(".jsonc")
+        alternate.write_text("{}\n", encoding="utf-8")
+        self.config.write_text("{}\n", encoding="utf-8")
+        actions = self.plan_against(self.config, alternate)
+        self.assertTrue(actions[0].conflict)
+        self.assertIn("both exist", actions[0].conflict)
+
     def test_non_list_instructions_is_refused_rather_than_iterated(self) -> None:
         self.config.write_text(
             json.dumps({"instructions": "docs/own.md"}) + "\n", encoding="utf-8"
         )
         with self.assertRaises(SystemExit):
             self.plan_against(self.config)
+
+
+class ForeignCopyTest(unittest.TestCase):
+    """Another tool may already publish these fragments under its own markers."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.fragments = [fragment("alpha")]
+        template = next(host for host in ADAPTER.HOSTS if host.mode == "inline")
+        self.path = Path(self.temporary.name) / "AGENTS.md"
+        self.host = ADAPTER.Host(
+            key=template.key,
+            label=template.label,
+            mode=template.mode,
+            detect=template.detect,
+            target=str(self.path),
+        )
+
+    def test_a_copy_outside_our_block_is_detected(self) -> None:
+        document = "# Theirs\n\n<!-- BEGIN other-tool -->\n## alpha\n<!-- END other-tool -->\n"
+        self.assertEqual(ADAPTER.foreign_copies(document, self.fragments), ["## alpha"])
+
+    def test_our_own_block_is_not_mistaken_for_a_copy(self) -> None:
+        block = ADAPTER.render_block(self.host, self.fragments, "main")
+        self.assertEqual(ADAPTER.foreign_copies(ADAPTER.replace_block("", block), self.fragments), [])
+
+    def test_an_unrelated_file_is_clean(self) -> None:
+        self.assertEqual(ADAPTER.foreign_copies("# Notes\n\n- Be brief.\n", self.fragments), [])
+
+    def test_planning_refuses_instead_of_appending_a_second_copy(self) -> None:
+        original = "<!-- BEGIN other-tool -->\n## alpha\n<!-- END other-tool -->\n"
+        self.path.write_text(original, encoding="utf-8")
+        actions = ADAPTER.plan_block(self.host, self.fragments, "main")
+        self.assertTrue(actions[0].conflict)
+        self.assertIsNone(actions[0].apply)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), original)
 
 
 class LinkHostTest(unittest.TestCase):
@@ -264,6 +331,13 @@ class LinkHostTest(unittest.TestCase):
                 action.apply()
         self.assertFalse((self.target / "beta.md").is_symlink())
         self.assertEqual(retiring[0].retires, str(self.target / "beta.md"))
+
+    def test_links_to_another_store_are_named_in_the_host_list(self) -> None:
+        theirs = Path(self.temporary.name) / "their-store"
+        theirs.mkdir()
+        (self.target / "alpha.md").symlink_to(theirs / "alpha.md")
+        state = ADAPTER.observed_state(self.host, [fragment("alpha")])
+        self.assertIn(str(theirs), state)
 
     def test_a_foreign_link_in_the_directory_is_left_alone(self) -> None:
         elsewhere = Path(self.temporary.name) / "elsewhere.md"

@@ -61,6 +61,10 @@ class Host:
     mode: str
     detect: str
     target: str
+    # A second spelling the host reads instead of target, when it accepts one.
+    # Writing target while this exists would leave two configs whose precedence
+    # the host does not document.
+    alt_target: str = ""
     note: str = ""
 
 
@@ -90,6 +94,14 @@ HOSTS: tuple[Host, ...] = (
         note="Global rules live in a settings field no file can populate; paste the rendered text.",
     ),
     Host(
+        key="grok",
+        label="Grok",
+        mode="link",
+        detect="~/.grok",
+        target="~/.grok/rules",
+        note="Home rules load in every project; the directory resolves symlinks.",
+    ),
+    Host(
         key="gemini-cli",
         label="Gemini CLI",
         mode="import",
@@ -103,6 +115,7 @@ HOSTS: tuple[Host, ...] = (
         mode="config",
         detect="~/.config/opencode",
         target="~/.config/opencode/opencode.json",
+        alt_target="~/.config/opencode/opencode.jsonc",
         note="A project-level config that also sets instructions replaces this array instead of merging.",
     ),
 )
@@ -376,6 +389,23 @@ def strip_block(current: str) -> str:
     return "" if not remainder.strip() else remainder
 
 
+def foreign_copies(current: str, fragments: list[Fragment]) -> list[str]:
+    """Fragment titles already present in the file outside our managed block.
+
+    Another tool may publish the same fragments under its own markers. Appending
+    our block as well would load the same rules into the host twice, so this is a
+    conflict to resolve rather than an update to apply.
+    """
+    span = find_block(current)
+    outside = current[: span[0]] + current[span[1] :] if span else current
+    titles = []
+    for fragment in fragments:
+        title = fragment.body.splitlines()[0].strip()
+        if title and title in outside:
+            titles.append(title)
+    return titles
+
+
 def write_file(path: Path, content: str) -> None:
     # Write through a symlink so a host config kept in a dotfile repository stays
     # linked instead of being replaced by a regular file.
@@ -495,6 +525,19 @@ def plan_block(host: Host, fragments: list[Fragment], ref: str) -> list[Action]:
     path = host_path(host.target)
     existed = path.exists()
     old = path.read_text(encoding="utf-8") if existed else ""
+    duplicates = foreign_copies(old, fragments)
+    if duplicates:
+        return [
+            Action(
+                summary=f"{path} already carries these fragments outside our block",
+                path=path,
+                conflict=(
+                    f"{path} already contains {len(duplicates)} of these fragments "
+                    f"outside our managed block (first: {duplicates[0]}); remove that "
+                    "copy so the rules are not loaded twice"
+                ),
+            )
+        ]
     new = replace_block(old, render_block(host, fragments, ref))
     artifact = {"path": str(path), "kind": "block", "created": not existed}
     if old == new:
@@ -516,6 +559,35 @@ def config_glob() -> str:
 
 def plan_config(host: Host) -> list[Action]:
     path = host_path(host.target)
+    alternate = host_path(host.alt_target) if host.alt_target else None
+    if alternate and alternate.exists():
+        if path.exists():
+            return [
+                Action(
+                    summary=f"{path} and {alternate} both exist",
+                    path=path,
+                    conflict=(
+                        f"{path} and {alternate} both exist; the host does not "
+                        "document which wins. Keep one and rerun"
+                    ),
+                )
+            ]
+        # Comments make this file unparseable as JSON, and rewriting it from a
+        # stripped parse would drop them, so registration stays manual here.
+        registered = config_glob() in alternate.read_text(encoding="utf-8")
+        if registered:
+            return [Action(summary=f"{alternate} already registers the glob", path=alternate)]
+        return [
+            Action(
+                summary=f"{alternate} needs the glob added by hand",
+                path=alternate,
+                conflict=(
+                    f'{alternate} is JSONC and cannot be edited safely; add '
+                    f'"{config_glob()}" to its instructions array yourself'
+                ),
+            )
+        ]
+
     existed = path.exists()
     old = path.read_text(encoding="utf-8") if existed else ""
     try:
@@ -841,15 +913,63 @@ def command_uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def observed_state(host: Host, fragments: list[Fragment]) -> str:
+    """What is already in place at this host, for hosts we have not wired.
+
+    A host can look untouched while another tool already publishes these rules
+    there. Naming that here keeps the list honest about what an install would
+    have to take over.
+    """
+    if host.mode == "link":
+        target_dir = host_path(host.target)
+        if not target_dir.is_dir():
+            return ""
+        links = [entry for entry in sorted(target_dir.iterdir()) if entry.is_symlink()]
+        if not links:
+            return ""
+        sources = {Path(os.readlink(link)).parent for link in links}
+        others = sorted(str(source) for source in sources if source != store_dir())
+        if others:
+            return f"{len(links)} symlink(s) here, pointing at {', '.join(others)}"
+        return f"{len(links)} symlink(s) already point at the store"
+    if host.mode in {"import", "inline"}:
+        path = host_path(host.target)
+        if not path.exists():
+            return ""
+        text = path.read_text(encoding="utf-8")
+        marks = []
+        if find_block(text):
+            marks.append("has our managed block")
+        copies = foreign_copies(text, fragments)
+        if copies:
+            marks.append(f"{len(copies)} of these fragments present outside it")
+        return "; ".join(marks)
+    if host.mode == "config":
+        alternate = host_path(host.alt_target) if host.alt_target else None
+        if alternate and alternate.exists():
+            registered = config_glob() in alternate.read_text(encoding="utf-8")
+            return f"{alternate} in use{'' if registered else '; glob not registered'}"
+        path = host_path(host.target)
+        if path.exists() and config_glob() in path.read_text(encoding="utf-8"):
+            return "glob already registered"
+        return ""
+    rendered = manual_dir() / f"{host.key}-user-rules.md"
+    return f"text rendered at {rendered}" if rendered.exists() else ""
+
+
 def command_list_hosts(args: argparse.Namespace) -> int:
     receipt = read_receipt()
     wired = receipt.get("hosts", {})
+    fragments = read_store_fragments()
     width = max(len(host.label) for host in HOSTS)
     for host in HOSTS:
         state = "wired" if host.key in wired else ("detected" if detected(host) else "-")
         target = host.target or "(host UI field)"
         print(f"{host.label:<{width}}  {host.key:<12} {host.mode:<7} {state:<8} {target}")
         print(f"{'':<{width}}  {host.note}")
+        current = observed_state(host, fragments)
+        if current:
+            print(f"{'':<{width}}  {current}")
     return 0
 
 
