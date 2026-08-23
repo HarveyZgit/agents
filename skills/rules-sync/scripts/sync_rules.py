@@ -29,10 +29,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Bump REF when publishing a revision of the fragments. The value pins what
-# `install` and `update` fetch; `check` compares it against what is installed.
+# The tracked branch: `install` and `update` fetch its current tip, so publishing
+# fragments needs no change here. Pass --ref to pin a specific revision instead.
+# Freshness therefore cannot be judged offline; `update` is the way to catch up.
 SOURCE_REPO = "HarveyZgit/agents"
-SOURCE_REF = "6481f8a596d18064b52e277b3e52f389cd7d9dc2"
+SOURCE_REF = "main"
 SOURCE_SUBDIR = "rules"
 
 BEGIN_MARKER = "<!-- BEGIN agents-rules (managed by rules-sync) -->"
@@ -233,7 +234,7 @@ def download(url: str, attempts: int = 3) -> bytes:
 
 
 def fetch_fragments(ref: str) -> list[Fragment]:
-    """Download the pinned revision and return its core fragments."""
+    """Download the requested revision and return its core fragments."""
     payload = download(f"https://codeload.github.com/{SOURCE_REPO}/tar.gz/{ref}")
 
     wanted = re.compile(rf"^[^/]+/{re.escape(SOURCE_SUBDIR)}/([^/]+\.md)$")
@@ -688,7 +689,9 @@ def command_check(args: argparse.Namespace) -> int:
     wired = receipt.get("hosts", {})
     problems: list[str] = []
     if installed_ref != SOURCE_REF:
-        problems.append(f"pinned revision is {SOURCE_REF[:12]}; run `update`")
+        # Only fires when a specific revision was installed with --ref: the
+        # tracked branch cannot be compared against its own tip offline.
+        problems.append(f"installed from {installed_ref[:12]}, not {SOURCE_REF}; run `update`")
     if not fragments:
         problems.append(f"{store_dir()} holds no readable fragment")
     if not wired:
@@ -840,13 +843,13 @@ def main(argv: list[str] | None = None) -> int:
 
     install = subparsers.add_parser("install", help="fetch fragments and wire hosts")
     add_common(install)
-    install.add_argument("--ref", help="override the pinned source revision")
+    install.add_argument("--ref", help="pin a specific revision instead of the tracked branch")
     install.add_argument("--diff", action="store_true", help="show a diff for each change")
     install.set_defaults(func=command_install)
 
-    update = subparsers.add_parser("update", help="re-fetch the pinned revision and rewire")
+    update = subparsers.add_parser("update", help="re-fetch the tracked branch and rewire")
     add_common(update)
-    update.add_argument("--ref", help="override the pinned source revision")
+    update.add_argument("--ref", help="pin a specific revision instead of the tracked branch")
     update.add_argument("--diff", action="store_true", help="show a diff for each change")
     update.set_defaults(func=command_install)
 

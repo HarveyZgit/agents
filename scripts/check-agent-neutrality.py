@@ -34,11 +34,10 @@ SCAN_FILES = {
     "README.md",
 }
 # Distributing rules into host configurations requires naming hosts and their
-# runtime paths. Those files are the adapter layer, exempt by the same logic as
+# runtime paths. This file is the adapter layer, exempt by the same logic as
 # ADAPTER_CONTENT above. The exemption is per file, so the Skill body shipped
-# alongside them stays scanned and must remain host-neutral.
+# alongside it stays scanned and must remain host-neutral.
 HOST_ADAPTER_FILES = {
-    "skills/rules-sync/references/hosts.md",
     "skills/rules-sync/scripts/sync_rules.py",
 }
 EXCLUDED_PARTS = {"tests", "fixtures", "workspace", "dist", "node_modules"}

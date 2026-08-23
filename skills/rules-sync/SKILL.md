@@ -5,7 +5,7 @@ description: Install, update, verify, or remove the maintainer's shared core rul
 
 # rules-sync
 
-Wire the `tier: core` rule fragments published by the maintainer's agents repository into every agent host on this machine, so each host loads the same rules from one pinned revision instead of a hand-maintained copy per host.
+Wire the `tier: core` rule fragments published by the maintainer's agents repository into every agent host on this machine, so each host loads the same rules from one shared source instead of a hand-maintained copy per host.
 
 ## The adapter owns host knowledge
 
@@ -18,8 +18,8 @@ Fragments land in a neutral store (`~/.agents/rules` by default, overridable wit
 ```sh
 python3 scripts/sync_rules.py list-hosts               # known hosts, mechanism, detected/wired state
 python3 scripts/sync_rules.py install --dry-run        # plan only; add --diff for exact edits
-python3 scripts/sync_rules.py install                  # fetch pinned revision and wire hosts
-python3 scripts/sync_rules.py update                   # same, after the pinned revision moved
+python3 scripts/sync_rules.py install                  # fetch the tracked branch and wire hosts
+python3 scripts/sync_rules.py update                   # same, to pick up newer fragments
 python3 scripts/sync_rules.py check                    # offline drift report; non-zero on drift
 python3 scripts/sync_rules.py uninstall                # revert every recorded change
 ```
@@ -39,6 +39,6 @@ Never remove a host's wiring without the user asking for it. `install --host X` 
 
 ## Maintaining the adapter
 
-The pinned source revision is `SOURCE_REF` at the top of the script; bump it when publishing new fragments, since `check` compares the installed revision against it and reports the difference as drift.
+`SOURCE_REF` at the top of the script is the tracked branch, so publishing fragments needs no change to the script: the next `update` fetches the new tip. The cost is that freshness cannot be judged offline — `check` verifies that hosts still match the local store, not that the store matches the remote. When the user asks whether their rules are current, run `update`; it is idempotent and reports nothing to change when they already are. Use `--ref <sha>` when a run must be reproducible.
 
-`references/hosts.md` records why each host has the mechanism it has and what would justify changing it. Read it before adding a host or switching a host's mode — the choice usually depends on a host capability that has since moved.
+Each entry in the script's `HOSTS` table carries the capability its mode depends on. Re-check that capability before switching a host's mode: the mechanism is a consequence of what the host can follow, not a preference.
