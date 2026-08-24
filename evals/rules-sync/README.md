@@ -15,7 +15,7 @@ python3 evals/rules-sync/tests/test_sync_rules.py
 python3 evals/rules-sync/tests/test_setup_sandbox.py
 ```
 
-`test_sync_rules.py` 覆盖适配器动用户文件的那几个原语：托管块的写入/移除、配置项的注册/注销、`created` 标记的粘性、以及经软链写入。这些回归会静默损坏宿主配置，所以离线单测比端到端评测更靠得住。
+`test_sync_rules.py` 覆盖适配器动用户文件的那几个原语：托管块的写入/移除、配置项的注册/注销、按片段写入宿主自有 frontmatter 的文件、`created` 标记的粘性、以及经软链写入。这些回归会静默损坏宿主配置，所以离线单测比端到端评测更靠得住。
 
 ## 运行评测
 
