@@ -53,6 +53,8 @@ class Host:
       import  managed block of import directives the host expands at startup
       inline  managed block of fragment bodies, for hosts that expand nothing
       config  register a glob in the host's config file
+      mdc     write one .mdc file per fragment into a directory the host loads,
+              with host-specific frontmatter (alwaysApply: true)
       manual  render text the user pastes into a UI field the host owns
     """
 
@@ -87,11 +89,11 @@ HOSTS: tuple[Host, ...] = (
     ),
     Host(
         key="cursor",
-        label="Cursor",
-        mode="manual",
+        label="Cursor CLI",
+        mode="mdc",
         detect="~/.cursor",
-        target="",
-        note="Global rules live in a settings field no file can populate; paste the rendered text.",
+        target="~/.cursor/rules",
+        note="User-level .mdc files load for the CLI agent; alwaysApply is set so core fragments apply in every session.",
     ),
     Host(
         key="grok",
@@ -630,6 +632,126 @@ def plan_config(host: Host) -> list[Action]:
     ]
 
 
+def render_mdc(fragment: Fragment) -> str:
+    """One host-owned rule file: our body plus the frontmatter this host requires.
+
+    The store keeps fragments host-neutral. This host ignores a plain .md, and
+    only loads a file that declares alwaysApply, so the adapter wraps the body
+    here rather than leaking that spelling into the fragment.
+    """
+    return (
+        f"---\n"
+        f"description: {fragment.description}\n"
+        f"alwaysApply: true\n"
+        f"---\n\n"
+        f"{fragment.body}\n"
+    )
+
+
+def managed_mdc(text: str) -> bool:
+    """True when the file is in the shape we write, not a user's own rule.
+
+    A same-named file the user authored may also be YAML, so we require the
+    opening we generate (description + alwaysApply: true) before treating it
+    as ours to update or remove.
+    """
+    if not text.startswith("---\ndescription:"):
+        return False
+    end = text.find("\n---\n", 3)
+    if end == -1:
+        return False
+    head = text[4 : end + 1]
+    return any(line.strip() == "alwaysApply: true" for line in head.splitlines())
+
+
+def mdc_description(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("description:"):
+            return line.partition(":")[2].strip()
+    return ""
+
+
+def plan_mdc(
+    host: Host, fragments: list[Fragment], previous_names: set[str] | None = None
+) -> list[Action]:
+    actions: list[Action] = []
+    target_dir = host_path(host.target)
+    if target_dir.exists() and not target_dir.is_dir():
+        return [
+            Action(
+                summary=f"{target_dir} is not a directory",
+                path=target_dir,
+                conflict=f"{target_dir} is not a directory; move it aside",
+            )
+        ]
+    wanted = {fragment.name for fragment in fragments}
+    for fragment in fragments:
+        path = target_dir / f"{fragment.name}.mdc"
+        old = path.read_text(encoding="utf-8") if path.exists() else ""
+        desired = render_mdc(fragment)
+        if not fragment.description and old and managed_mdc(old):
+            # check reads the store, which has no description. Reusing the one
+            # already on disk keeps a description-only rewrite from looking
+            # like drift after a successful install.
+            desired = render_mdc(
+                Fragment(
+                    name=fragment.name,
+                    filename=fragment.filename,
+                    description=mdc_description(old),
+                    tier=fragment.tier,
+                    body=fragment.body,
+                )
+            )
+        artifact = {"path": str(path), "kind": "file", "created": not path.exists()}
+        if old == desired and path.exists() and not path.is_symlink():
+            actions.append(
+                Action(summary=f"{path} already current", path=path, artifact=artifact)
+            )
+            continue
+        if path.exists() and not managed_mdc(old):
+            actions.append(
+                Action(
+                    summary=f"{path} exists and is not a managed .mdc file",
+                    path=path,
+                    conflict=f"{path} exists and is not a managed .mdc file; move it aside",
+                )
+            )
+            continue
+
+        def apply(path=path, desired=desired) -> None:
+            write_file(path, desired)
+
+        verb = "update" if path.exists() else "write"
+        actions.append(
+            Action(
+                summary=f"{verb} {fragment.name}.mdc in {target_dir}",
+                path=path,
+                diff=diff_text(path, old, desired),
+                apply=apply,
+                artifact=artifact,
+            )
+        )
+
+    # A fragment withdrawn upstream leaves a .mdc we wrote. Only names we
+    # previously installed, and files that still look like ours, are ours
+    # to remove; a user's own .mdc in the same directory stays.
+    for name in sorted((previous_names or set()) - wanted):
+        path = target_dir / f"{name}.mdc"
+        if not path.is_file() or path.is_symlink():
+            continue
+        if not managed_mdc(path.read_text(encoding="utf-8")):
+            continue
+        actions.append(
+            Action(
+                summary=f"remove withdrawn {path.name} from {target_dir}",
+                path=path,
+                apply=lambda path=path: path.unlink(),
+                retires=str(path),
+            )
+        )
+    return actions
+
+
 def plan_manual(host: Host, fragments: list[Fragment], ref: str) -> list[Action]:
     path = manual_dir() / f"{host.key}-user-rules.md"
     header = (
@@ -679,13 +801,18 @@ def merge_artifacts(
     return merged
 
 
-def plan_host(host: Host, fragments: list[Fragment], ref: str) -> list[Action]:
+def plan_host(
+    host: Host, fragments: list[Fragment], ref: str, receipt: dict | None = None
+) -> list[Action]:
     if host.mode == "link":
         return plan_link(host, fragments)
     if host.mode in {"import", "inline"}:
         return plan_block(host, fragments, ref)
     if host.mode == "config":
         return plan_config(host)
+    if host.mode == "mdc":
+        previous = {Path(name).stem for name in (receipt or {}).get("fragments", [])}
+        return plan_mdc(host, fragments, previous)
     return plan_manual(host, fragments, ref)
 
 
@@ -734,7 +861,7 @@ def command_install(args: argparse.Namespace) -> int:
     # must not abort the run halfway and leave earlier hosts wired with no
     # receipt to revert them.
     store_actions = plan_store(fragments, receipt)
-    plans = [(host, plan_host(host, fragments, ref)) for host in hosts]
+    plans = [(host, plan_host(host, fragments, ref, receipt)) for host in hosts]
     conflicts = [action for _, actions in plans for action in actions if action.conflict]
     if conflicts:
         print("\nrefusing to write, nothing has changed. Resolve these first:")
@@ -822,7 +949,7 @@ def command_check(args: argparse.Namespace) -> int:
             continue
         pending = [
             action
-            for action in plan_host(host, fragments, installed_ref)
+            for action in plan_host(host, fragments, installed_ref, receipt)
             if action.apply is not None or action.conflict
         ]
         state = "drift" if pending else "ok"
@@ -969,6 +1096,21 @@ def observed_state(host: Host, fragments: list[Fragment]) -> str:
         if path.exists() and config_glob() in path.read_text(encoding="utf-8"):
             return "glob already registered"
         return ""
+    if host.mode == "mdc":
+        target_dir = host_path(host.target)
+        if not target_dir.is_dir():
+            return ""
+        count = 0
+        for entry in sorted(target_dir.iterdir()):
+            if entry.is_symlink() or entry.suffix != ".mdc" or not entry.is_file():
+                continue
+            try:
+                text = entry.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if managed_mdc(text):
+                count += 1
+        return f"{count} managed .mdc file(s)" if count else ""
     rendered = manual_dir() / f"{host.key}-user-rules.md"
     return f"text rendered at {rendered}" if rendered.exists() else ""
 

@@ -11,7 +11,7 @@ Wire the `tier: core` rule fragments published by the maintainer's agents reposi
 
 `scripts/sync_rules.py` is the only component that knows which hosts exist, where their global configuration lives, and which mechanism each one supports. Drive it and report what it did; do not open host configuration files yourself and do not reimplement its wiring by hand. Hand edits drift from the receipt the script keeps, and the next `check` or `uninstall` can then no longer reason about what is installed.
 
-Fragments land in a neutral store (`~/.agents/rules` by default, overridable with `AGENT_RULES_HOME`). Hosts that can follow a live reference get a symlink, an import directive, or a config glob pointing at that store, so a later `update` reaches them without touching their config again. Only hosts that expand nothing receive inlined text, and hosts whose global rules live in a UI field get rendered text plus a manual step.
+Fragments land in a neutral store (`~/.agents/rules` by default, overridable with `AGENT_RULES_HOME`). Hosts that can follow a live reference get a symlink, an import directive, or a config glob pointing at that store, so a later `update` reaches them without touching their config again. Hosts that load a directory of files with their own frontmatter get one written file per fragment. Only hosts that expand nothing receive inlined text; a host whose global rules live only in a UI field would get rendered text plus a manual step.
 
 ## Commands
 
@@ -31,7 +31,7 @@ python3 scripts/sync_rules.py uninstall                # revert every recorded c
 1. Run `list-hosts` when the user has not named hosts, so the plan covers what actually exists here rather than an assumption.
 2. Run the mutating command with `--dry-run` first and show the user which hosts change and how. Global rule files are configuration the user reads and edits themselves, so they should recognize every edit before it happens. Skip the preview only when the user has already approved this exact plan.
 3. Apply, then report per host: the mechanism used, the file touched, and the result.
-4. Surface any manual step verbatim, including the path of the rendered text. A host reporting success while its rules are still unpasted is the one failure mode the script cannot detect.
+4. If a host still needs a manual step, surface it verbatim, including the path of any rendered text. A host reporting success while that step is unfinished is the one failure mode the script cannot detect.
 5. On `check` drift, prefer `install`/`update` to repair it. Editing the managed block by hand fixes the symptom and leaves the receipt stale.
 6. If a command refuses because a target path holds something the script did not create, nothing has been written yet. Report the listed paths, let the user move them aside, then rerun.
 

@@ -2,14 +2,16 @@
 """Self-tests for the rules-sync adapter's edit primitives.
 
 These cover the operations that touch files a user owns: inserting and removing
-a managed block, registering and deregistering a config entry, and remembering
-which files we created. A regression here silently damages host configuration,
-which is exactly what the receipt and the markers exist to prevent.
+a managed block, registering and deregistering a config entry, writing host-owned
+.mdc files, and remembering which files we created. A regression here silently
+damages host configuration, which is exactly what the receipt and the markers
+exist to prevent.
 """
 
 from __future__ import annotations
 
 import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -413,6 +415,189 @@ class WriteThroughSymlinkTest(unittest.TestCase):
             path.chmod(0o600)
             ADAPTER.write_file(path, '{"instructions": []}\n')
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+
+class MdcHostTest(unittest.TestCase):
+    """The mdc mode writes one host-owned .mdc file per fragment."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.home = root / "home"
+        self.home.mkdir()
+        self.store = root / "store"
+        self.store.mkdir()
+        self.original_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(self.home)
+        self.addCleanup(self.restore_home)
+        context = store_at(self.store)
+        context.__enter__()
+        self.addCleanup(context.__exit__, None, None, None)
+        template = ADAPTER.HOSTS_BY_KEY["cursor"]
+        self.host = ADAPTER.Host(
+            key=template.key,
+            label=template.label,
+            mode=template.mode,
+            detect=template.detect,
+            target=str(root / "rules"),
+            note=template.note,
+        )
+
+    def restore_home(self) -> None:
+        if self.original_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self.original_home
+
+    def make_fragment(self, name: str, description: str = "Example.") -> object:
+        return ADAPTER.Fragment(
+            name=name,
+            filename=f"{name}.md",
+            description=description,
+            tier="core",
+            body=f"## {name}\n\n- Do the thing.",
+        )
+
+    def apply(self, actions) -> None:
+        for action in actions:
+            if action.apply is not None:
+                action.apply()
+
+    def test_hosts_table_wires_cursor_as_mdc(self) -> None:
+        host = ADAPTER.HOSTS_BY_KEY["cursor"]
+        self.assertEqual(host.label, "Cursor CLI")
+        self.assertEqual(host.mode, "mdc")
+        self.assertEqual(host.target, "~/.cursor/rules")
+        self.assertEqual([item.key for item in ADAPTER.HOSTS if item.mode == "manual"], [])
+
+    def test_install_writes_mdc_with_always_apply_and_body(self) -> None:
+        fragment = self.make_fragment("example-rule")
+        actions = ADAPTER.plan_host(self.host, [fragment], "main")
+        self.assertFalse(any(action.conflict for action in actions))
+        self.apply(actions)
+        path = Path(self.host.target) / "example-rule.mdc"
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual(
+            text,
+            "---\ndescription: Example.\nalwaysApply: true\n---\n\n"
+            "## example-rule\n\n- Do the thing.\n",
+        )
+        self.assertEqual(actions[0].artifact["kind"], "file")
+
+    def test_install_creates_the_target_directory(self) -> None:
+        target = Path(self.host.target)
+        self.assertFalse(target.exists())
+        self.apply(ADAPTER.plan_mdc(self.host, [self.make_fragment("alpha")]))
+        self.assertTrue((target / "alpha.mdc").is_file())
+
+    def test_matching_content_is_current(self) -> None:
+        fragment = self.make_fragment("alpha")
+        self.apply(ADAPTER.plan_mdc(self.host, [fragment]))
+        actions = ADAPTER.plan_mdc(self.host, [fragment])
+        self.assertEqual(len(actions), 1)
+        self.assertIsNone(actions[0].apply)
+        self.assertFalse(actions[0].conflict)
+
+    def test_update_rewrites_a_managed_file_when_the_body_changes(self) -> None:
+        first = self.make_fragment("alpha", "First.")
+        self.apply(ADAPTER.plan_mdc(self.host, [first]))
+        second = ADAPTER.Fragment(
+            name="alpha",
+            filename="alpha.md",
+            description="Second.",
+            tier="core",
+            body="## alpha\n\n- Do the other thing.",
+        )
+        actions = ADAPTER.plan_mdc(self.host, [second])
+        self.assertIsNotNone(actions[0].apply)
+        self.apply(actions)
+        text = (Path(self.host.target) / "alpha.mdc").read_text(encoding="utf-8")
+        self.assertIn("description: Second.", text)
+        self.assertIn("- Do the other thing.", text)
+        self.assertNotIn("- Do the thing.", text)
+
+    def test_empty_store_description_does_not_look_like_drift(self) -> None:
+        # check rebuilds fragments from the store, which has no description.
+        self.apply(ADAPTER.plan_mdc(self.host, [self.make_fragment("alpha", "Example.")]))
+        stored = ADAPTER.Fragment(
+            name="alpha", filename="alpha.md", description="", tier="core",
+            body="## alpha\n\n- Do the thing.",
+        )
+        actions = ADAPTER.plan_mdc(self.host, [stored])
+        self.assertIsNone(actions[0].apply)
+        self.assertIn("description: Example.", (Path(self.host.target) / "alpha.mdc").read_text(encoding="utf-8"))
+
+    def test_a_foreign_file_with_the_same_name_is_a_conflict(self) -> None:
+        path = Path(self.host.target)
+        path.mkdir()
+        occupied = path / "alpha.mdc"
+        occupied.write_text("# mine\n\n- keep this\n", encoding="utf-8")
+        actions = ADAPTER.plan_mdc(self.host, [self.make_fragment("alpha")])
+        self.assertTrue(actions[0].conflict)
+        self.assertIsNone(actions[0].apply)
+        self.assertEqual(occupied.read_text(encoding="utf-8"), "# mine\n\n- keep this\n")
+
+    def test_uninstall_removes_only_our_files(self) -> None:
+        target = Path(self.host.target)
+        self.apply(ADAPTER.plan_mdc(self.host, [self.make_fragment("alpha")]))
+        theirs = target / "personal.mdc"
+        theirs.write_text("---\nalwaysApply: true\n---\n\n# mine\n", encoding="utf-8")
+        ours = target / "alpha.mdc"
+        ADAPTER.undo_artifact({"path": str(ours), "kind": "file", "created": True})
+        self.assertFalse(ours.exists())
+        self.assertEqual(theirs.read_text(encoding="utf-8"), "---\nalwaysApply: true\n---\n\n# mine\n")
+
+    def test_withdrawn_managed_file_is_removed_foreign_file_is_not(self) -> None:
+        target = Path(self.host.target)
+        self.apply(
+            ADAPTER.plan_mdc(
+                self.host, [self.make_fragment("alpha"), self.make_fragment("beta")]
+            )
+        )
+        theirs = target / "personal.mdc"
+        theirs.write_text("---\ndescription: mine\nalwaysApply: true\n---\n\n# mine\n", encoding="utf-8")
+        actions = ADAPTER.plan_mdc(
+            self.host, [self.make_fragment("alpha")], previous_names={"alpha", "beta"}
+        )
+        retiring = [action for action in actions if action.retires]
+        self.assertEqual(len(retiring), 1)
+        self.assertEqual(retiring[0].retires, str(target / "beta.mdc"))
+        self.apply(actions)
+        self.assertFalse((target / "beta.mdc").exists())
+        self.assertTrue((target / "alpha.mdc").exists())
+        self.assertTrue(theirs.exists())
+
+    def test_observed_state_counts_our_mdc_files(self) -> None:
+        self.apply(ADAPTER.plan_mdc(self.host, [self.make_fragment("alpha")]))
+        (Path(self.host.target) / "personal.mdc").write_text(
+            "# not ours\n", encoding="utf-8"
+        )
+        state = ADAPTER.observed_state(self.host, [self.make_fragment("alpha")])
+        self.assertEqual(state, "1 managed .mdc file(s)")
+
+    def test_list_hosts_shows_mdc_and_user_rules_dir(self) -> None:
+        with io.StringIO() as buffer:
+            with contextlib.redirect_stdout(buffer):
+                code = ADAPTER.main(["list-hosts"])
+            output = buffer.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("Cursor CLI", output)
+        self.assertIn("cursor", output)
+        self.assertRegex(output, r"cursor\s+mdc\b")
+        self.assertIn("~/.cursor/rules", output)
+        self.assertNotIn("(host UI field)", output)
+
+    def test_real_cursor_host_writes_under_sandboxed_home(self) -> None:
+        host = ADAPTER.HOSTS_BY_KEY["cursor"]
+        fragment = self.make_fragment("example-rule")
+        actions = ADAPTER.plan_host(host, [fragment], "main")
+        self.apply(actions)
+        path = self.home / ".cursor" / "rules" / "example-rule.mdc"
+        self.assertTrue(path.is_file())
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("alwaysApply: true", text.split("\n---\n", 1)[0])
+        self.assertIn("## example-rule", text)
 
 
 if __name__ == "__main__":
