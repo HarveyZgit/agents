@@ -88,7 +88,7 @@ HOSTS: tuple[Host, ...] = (
         note="Import directives are not expanded here, so bodies are inlined.",
     ),
     Host(
-        key="cursor",
+        key="cursor-cli",
         label="Cursor CLI",
         mode="mdc",
         detect="~/.cursor",

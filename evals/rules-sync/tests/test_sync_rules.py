@@ -434,7 +434,7 @@ class MdcHostTest(unittest.TestCase):
         context = store_at(self.store)
         context.__enter__()
         self.addCleanup(context.__exit__, None, None, None)
-        template = ADAPTER.HOSTS_BY_KEY["cursor"]
+        template = ADAPTER.HOSTS_BY_KEY["cursor-cli"]
         self.host = ADAPTER.Host(
             key=template.key,
             label=template.label,
@@ -465,7 +465,7 @@ class MdcHostTest(unittest.TestCase):
                 action.apply()
 
     def test_hosts_table_wires_cursor_as_mdc(self) -> None:
-        host = ADAPTER.HOSTS_BY_KEY["cursor"]
+        host = ADAPTER.HOSTS_BY_KEY["cursor-cli"]
         self.assertEqual(host.label, "Cursor CLI")
         self.assertEqual(host.mode, "mdc")
         self.assertEqual(host.target, "~/.cursor/rules")
@@ -583,13 +583,13 @@ class MdcHostTest(unittest.TestCase):
             output = buffer.getvalue()
         self.assertEqual(code, 0)
         self.assertIn("Cursor CLI", output)
-        self.assertIn("cursor", output)
-        self.assertRegex(output, r"cursor\s+mdc\b")
+        self.assertIn("cursor-cli", output)
+        self.assertRegex(output, r"cursor-cli\s+mdc\b")
         self.assertIn("~/.cursor/rules", output)
         self.assertNotIn("(host UI field)", output)
 
     def test_real_cursor_host_writes_under_sandboxed_home(self) -> None:
-        host = ADAPTER.HOSTS_BY_KEY["cursor"]
+        host = ADAPTER.HOSTS_BY_KEY["cursor-cli"]
         fragment = self.make_fragment("example-rule")
         actions = ADAPTER.plan_host(host, [fragment], "main")
         self.apply(actions)
