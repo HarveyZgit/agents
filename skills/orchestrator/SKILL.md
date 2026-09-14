@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Set this session as the plan orchestrator — design, synthesize, plan, align with the user, and commit after confirmation; hand implementation and detail work to a subagent or a task book. Use at the start of a high-level model session (e.g. Fable, Alstra) when the user wants a controller role, or says orchestrate / dispatch implementation / you be the brain.
+description: Set this session as the plan orchestrator — design, synthesize, plan, align with the user, and commit after confirmation; hand implementation and detail work to a subagent or a task book. Use at the start of a high-level model session (e.g. Fable, Astra) when the user wants a controller role, or says orchestrate / dispatch implementation / you be the brain.
 metadata:
   version: 1.0.0
 ---
