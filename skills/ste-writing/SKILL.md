@@ -1,6 +1,6 @@
 ---
 name: ste-writing
-description: 用 ASD-STE100（简化技术英语）的受控写法解释或改写一段内容，让模型输出更易读、更少歧义。当用户要求 STE、ASD-STE100、「用受控语言/简化技术英语写」、或嫌解释太绕要求「写清楚一点」时使用。Use when asked for STE, ASD-STE100, controlled language, or a plainer, less ambiguous rewrite of an explanation.
+description: 用短句、固定用词、一句一事的受控写法解释或改写一段内容，让人一遍读懂、不产生歧义。当用户觉得输出太冗长、太绕、看不懂，要求「写清楚一点」「换个说法」「别这么啰嗦」，或点名 STE / ASD-STE100 时使用。Use when the user finds an explanation too long, convoluted, or hard to follow and asks for a clearer, plainer rewrite, or asks for STE / ASD-STE100.
 metadata:
   version: 1.0.0
 ---
