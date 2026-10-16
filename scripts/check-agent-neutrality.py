@@ -40,6 +40,17 @@ SCAN_FILES = {
 HOST_ADAPTER_FILES = {
     "skills/rules-sync/scripts/sync_rules.py",
 }
+# A source-format adapter may name the data it reads, but it must not impose
+# an executing host. Allow only this exact diagnostic under this exact rule;
+# all three standalone copies remain scanned for every other coupling.
+SOURCE_FORMAT_LINES = {
+    f"skills/resume-{source}/scripts/session_reader.py": {
+        "vendor-workflow": {
+            '"Cursor CLI store.db is absent; no transcript content was fabricated.",',
+        },
+    }
+    for source in ("claude", "codex", "cursor")
+}
 EXCLUDED_PARTS = {"tests", "fixtures", "workspace", "dist", "node_modules"}
 BINARY_SUFFIXES = {".gif", ".ico", ".jpeg", ".jpg", ".mp3", ".mp4", ".otf", ".pdf", ".png", ".ttf", ".wav", ".webp", ".woff", ".woff2", ".zip"}
 GUARD_FILES = {"scripts/check-agent-neutrality.py", "scripts/test-agent-neutrality.py"}
@@ -133,7 +144,8 @@ def scan_file(relative_path: Path) -> list[str]:
                 f"{relative_path}:{line_number}: [fixed-commit-trailer] {line.strip()}"
             )
         for rule_name, pattern in RULES:
-            if pattern.search(line):
+            allowed_lines = SOURCE_FORMAT_LINES.get(relative_path.as_posix(), {}).get(rule_name, set())
+            if pattern.search(line) and line.strip() not in allowed_lines:
                 findings.append(f"{relative_path}:{line_number}: [{rule_name}] {line.strip()}")
     return findings
 

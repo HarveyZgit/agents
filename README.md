@@ -19,6 +19,8 @@ npx skills add HarveyZgit/agents -g
 npx skills add HarveyZgit/agents --list
 ```
 
+`resume-claude`、`resume-codex`、`resume-cursor` 用于读取其他工具的会话并在当前 Agent 续做，每个可独立安装。来源包未附上游许可，公开再分发前须确认权利；详见 [说明](skills/README.md#跨工具接续)。
+
 包绑定型 Skill（例如 workbench 里的 `markdown-comment`）不在这里。
 
 ## 安装 Rules
@@ -41,4 +43,5 @@ npx skills add HarveyZgit/agents --skill rules-sync
 ```sh
 python3 scripts/test-agent-neutrality.py
 python3 scripts/check-agent-neutrality.py
+python3 scripts/sync-resume-skills.py --check
 ```

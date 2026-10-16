@@ -45,6 +45,30 @@ class AgentNeutralityGuardTest(unittest.TestCase):
         self.assertIsNotNone(patterns["vendor-tool-invocation"].search("Agent(subagent_type=x)"))
         self.assertIsNotNone(patterns["vendor-workflow"].search("Install this for Gemini CLI"))
 
+    def test_source_format_allowance_does_not_exempt_execution_host(self) -> None:
+        allowed = '"Cursor CLI store.db is absent; no transcript content was fabricated.",'
+        paths = list(GUARD.SOURCE_FORMAT_LINES)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            original_root = GUARD.REPO_ROOT
+            try:
+                GUARD.REPO_ROOT = Path(temporary_directory)
+                for name in paths:
+                    path = Path(name)
+                    self.assertTrue(GUARD.should_scan(path))
+                    target = GUARD.REPO_ROOT / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(allowed + "\n", encoding="utf-8")
+                    self.assertEqual(GUARD.scan_file(path), [])
+                    for bad in ("Requires Cursor CLI", "Run Claude CLI", "Agent(subagent_type=x)"):
+                        target.write_text(allowed + "\n" + bad, encoding="utf-8")
+                        self.assertTrue(GUARD.scan_file(path), bad)
+                other = Path("skills/example/SKILL.md")
+                (GUARD.REPO_ROOT / other).parent.mkdir(parents=True)
+                (GUARD.REPO_ROOT / other).write_text(allowed, encoding="utf-8")
+                self.assertTrue(GUARD.scan_file(other))
+            finally:
+                GUARD.REPO_ROOT = original_root
+
     def test_rejects_fixed_commit_trailer(self) -> None:
         self.assertIsNotNone(
             GUARD.FIXED_TRAILER.search("Co-authored-by: Example Agent <agent@example.com>")
